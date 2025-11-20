@@ -47,7 +47,21 @@ bool player_load_track(Player *player, const char *filepath) {
 }
 
 void player_play(Player *player) {
-  if (audio_engine && audio_is_playing(audio_engine)) {
+  if (!audio_engine)
+    return;
+
+  // If track is stopped and at the end, restart from beginning
+  if (player->state == PLAYER_STOPPED &&
+      player->current_track.filepath[0] != '\0' &&
+      player->position >= player->current_track.duration - 0.01) {
+
+    // reload audio data (reopens file, resets cursor)
+    if (audio_load_file(audio_engine, player->current_track.filepath)) {
+      player->position = 0.0;
+    }
+  }
+
+  if (audio_is_playing(audio_engine)) {
     audio_pause(audio_engine);
     player->state = PLAYER_PAUSED;
   } else {
@@ -92,12 +106,14 @@ void player_update(Player *player) {
   if (audio_engine && player->state == PLAYER_PLAYING) {
     player->position = audio_get_position(audio_engine);
 
-    // If we reached the end of the track, stop
     if (player->position >= player->current_track.duration) {
-      player_stop(player);
+      player->position = player->current_track.duration;
+      player->state = PLAYER_STOPPED;
+      // do NOT call player_stop() here (it resets and loses "end" state)
     }
   }
 }
+
 void player_cleanup(void) {
   if (audio_engine) {
     audio_cleanup(audio_engine);
