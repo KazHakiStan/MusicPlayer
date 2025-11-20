@@ -1,0 +1,7 @@
+[
+  {
+    "directory": "C:/Projects/c/MusicPlayer",
+    "command": "gcc -Iinclude -IC:/msys64/mingw64/include -Wall -Wextra -c src/main.c -o src/main.o",
+    "file": "src/main.c"
+  }
+]
