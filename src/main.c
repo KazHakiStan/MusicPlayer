@@ -7,11 +7,6 @@
 int main(int argc, char *argv[]) {
   printf("Starting main, argc = %d\n", argc);
   fflush(stdout);
-  if (argc < 2) {
-    printf("Usage: %s <audio_file>\n", argv[0]);
-    return 1;
-  }
-  printf("Check main");
 
   // Initialize components
   ui_init();
@@ -24,16 +19,21 @@ int main(int argc, char *argv[]) {
   UIState ui_state = {0};
   ui_get_terminal_size(&ui_state.width, &ui_state.height);
 
-  // Load the track
-  if (!player_load_track(&player, argv[1])) {
-    printf("Failed to load audio file: %s\n", argv[1]);
-    player_cleanup();
-    ui_cleanup();
-    return 1;
-  }
+  // NEW: playlist fields start empty
+  ui_state.tracks = NULL;
+  ui_state.track_count = 0;
+  ui_state.selected_index = 0;
 
-  printf("Loaded: %s\n", argv[1]);
-  Sleep(2000); // Brief pause
+  // OPTIONAL: if user *does* pass an mp3, pre-load it
+  if (argc >= 2) {
+    if (!player_load_track(&player, argv[1])) {
+      printf("Failed to load audio file: %s\n", argv[1]);
+      Sleep(2000);
+    } else {
+      printf("Loaded: %s\n", argv[1]);
+      Sleep(1000);
+    }
+  }
 
   // Main loop
   while (!ui_state.should_quit) {
@@ -55,6 +55,7 @@ int main(int argc, char *argv[]) {
 
   // Cleanup
   ui_cleanup();
+  free(ui_state.tracks);
   printf("Goodbye!\n");
 
   return 0;

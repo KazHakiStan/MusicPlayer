@@ -7,6 +7,10 @@ typedef struct {
   int width;
   int height;
   bool should_quit;
+
+  Track *tracks;
+  int track_count;
+  int selected_index;
 } UIState;
 
 // UI functions
