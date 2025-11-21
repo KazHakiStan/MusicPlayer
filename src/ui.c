@@ -10,11 +10,40 @@
 static int g_first_draw = 1;
 
 typedef struct {
-  char name[MAX_PATH];
-  char full[MAX_PATH];
+  char name_display[MAX_PATH];
+  char path_fs[MAX_PATH];
   bool is_parent;
   bool is_drive;
 } FolderItem;
+
+static void ansi_to_utf8(const char *src, char *dst, int dst_size) {
+  if (!src || !dst || dst_size <= 0)
+    return;
+
+  // First convert from ANSI (CP_ACP) to UTF-16
+  int wlen = MultiByteToWideChar(CP_ACP, 0, src, -1, NULL, 0);
+  if (wlen <= 0) {
+    dst[0] = '\0';
+    return;
+  }
+
+  wchar_t *wbuf = (wchar_t *)malloc(wlen * sizeof(wchar_t));
+  if (!wbuf) {
+    dst[0] = '\0';
+    return;
+  }
+
+  MultiByteToWideChar(CP_ACP, 0, src, -1, wbuf, wlen);
+
+  // Now convert UTF-16 → UTF-8
+  int u8len =
+      WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, dst, dst_size, NULL, NULL);
+  free(wbuf);
+
+  if (u8len <= 0) {
+    dst[0] = '\0';
+  }
+}
 
 static int list_drives(FolderItem *items, int max_items) {
   DWORD mask = GetLogicalDrives();
@@ -25,8 +54,8 @@ static int list_drives(FolderItem *items, int max_items) {
       if (count >= max_items)
         break;
       FolderItem *it = &items[count++];
-      snprintf(it->name, sizeof(it->name), "%c:\\", letter);
-      snprintf(it->full, sizeof(it->full), "%c:\\", letter);
+      snprintf(it->path_fs, sizeof(it->path_fs), "%c:\\", letter);
+      ansi_to_utf8(it->path_fs, it->name_display, sizeof(it->name_display));
       it->is_parent = false;
       it->is_drive = true;
     }
@@ -40,14 +69,16 @@ static int list_subdirs2(const char *base, FolderItem *items, int max_items) {
   // parent entry
   if (base && base[0] != '\0') {
     FolderItem *p = &items[count++];
-    strcpy(p->name, "..");
-    p->full[0] = '\0';
+    strcpy(p->name_display, "..");
+    p->path_fs[0] = '\0';
     p->is_parent = true;
     p->is_drive = false;
   }
 
   char search[MAX_PATH];
   snprintf(search, sizeof(search), "%s\\*", base);
+
+  // TODO: Change to Wide format to support UTF8 (Cyrillic)
 
   WIN32_FIND_DATAA ffd;
   HANDLE hFind = FindFirstFileA(search, &ffd);
@@ -62,8 +93,12 @@ static int list_subdirs2(const char *base, FolderItem *items, int max_items) {
       if (count >= max_items)
         break;
       FolderItem *it = &items[count++];
-      snprintf(it->name, sizeof(it->name), "%s", ffd.cFileName);
-      snprintf(it->full, sizeof(it->full), "%s\\%s", base, ffd.cFileName);
+      // filesystem path (still ANSI)
+      snprintf(it->path_fs, sizeof(it->path_fs), "%s\\%s", base, ffd.cFileName);
+
+      // display name: ffd.cFileName converted to UTF-8
+      ansi_to_utf8(ffd.cFileName, it->name_display, sizeof(it->name_display));
+
       it->is_parent = false;
       it->is_drive = false;
     }
@@ -87,81 +122,75 @@ static void play_track_at_index(Player *player, UIState *ui_state, int index) {
   }
 }
 
-// Strip trailing newline from fgets
-static void trim_newline(char *s) {
-  size_t len = strlen(s);
-  while (len > 0 && (s[len - 1] == '\n' || s[len - 1] == '\r')) {
-    s[--len] = '\0';
-  }
-}
-
-static int list_subdirs(const char *base, char names[][MAX_PATH], int max) {
-  char search[MAX_PATH];
-  snprintf(search, sizeof(search), "%s\\*", base);
-
+// Load all *.mp3 files from a folder into ui_state->tracks
+static void add_folder_mp3s_recursive(UIState *ui_state, const char *folder) {
   WIN32_FIND_DATAA ffd;
-  HANDLE hFind = FindFirstFileA(search, &ffd);
-  if (hFind == INVALID_HANDLE_VALUE)
-    return 0;
+  HANDLE hFind;
+  char search[MAX_PATH];
 
-  int count = 0;
+  // 1) Add all *.mp3 in this folder
+  snprintf(search, sizeof(search), "%s\\*.mp3", folder);
+  hFind = FindFirstFileA(search, &ffd);
+  if (hFind != INVALID_HANDLE_VALUE) {
+    do {
+      if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        continue;
+
+      int idx = ui_state->track_count;
+      Track *new_arr = realloc(ui_state->tracks, (idx + 1) * sizeof(Track));
+      if (!new_arr) {
+        printf("\nOut of memory while adding tracks.\n");
+        break;
+      }
+      ui_state->tracks = new_arr;
+
+      Track *t = &ui_state->tracks[idx];
+      memset(t, 0, sizeof(Track));
+
+      // full path
+      snprintf(t->filepath, sizeof(t->filepath), "%s\\%s", folder,
+               ffd.cFileName);
+
+      // defaults from filename
+      ansi_to_utf8(ffd.cFileName, t->title, sizeof(t->title));
+      strcpy(t->artist, "Unknown Artist");
+      strcpy(t->album, "Unknown Album");
+      t->duration = 0.0;
+
+      // fill metadata (title/artist/album/duration) if available
+      player_fill_metadata_from_file(t->filepath, t);
+
+      ui_state->track_count++;
+    } while (FindNextFileA(hFind, &ffd));
+    FindClose(hFind);
+  }
+
+  // 2) Recurse into subdirectories
+  snprintf(search, sizeof(search), "%s\\*", folder);
+  hFind = FindFirstFileA(search, &ffd);
+  if (hFind == INVALID_HANDLE_VALUE)
+    return;
+
   do {
     if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
       if (strcmp(ffd.cFileName, ".") == 0 || strcmp(ffd.cFileName, "..") == 0)
         continue;
-      if (count < max) {
-        snprintf(names[count], MAX_PATH, "%s", ffd.cFileName);
-        count++;
-      }
+
+      char sub[MAX_PATH];
+      snprintf(sub, sizeof(sub), "%s\\%s", folder, ffd.cFileName);
+
+      // You might want to skip huge system dirs if scanning root drives
+      // e.g. skip "Windows", "Program Files" here if needed.
+
+      add_folder_mp3s_recursive(ui_state, sub);
     }
   } while (FindNextFileA(hFind, &ffd));
 
   FindClose(hFind);
-  return count;
 }
 
-// Load all *.mp3 files from a folder into ui_state->tracks
 static void add_folder_mp3s(UIState *ui_state, const char *folder) {
-  char search_path[MAX_PATH];
-  snprintf(search_path, sizeof(search_path), "%s\\*.mp3", folder);
-
-  WIN32_FIND_DATAA ffd;
-  HANDLE hFind = FindFirstFileA(search_path, &ffd);
-  if (hFind == INVALID_HANDLE_VALUE) {
-    printf("\033[K\nNo MP3 files found in %s\n", folder);
-    Sleep(1000);
-    return;
-  }
-
-  do {
-    if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-      continue;
-
-    int idx = ui_state->track_count;
-    Track *new_arr = realloc(ui_state->tracks, (idx + 1) * sizeof(Track));
-    if (!new_arr) {
-      printf("\033[K\nOut of memory while adding tracks.\033[K\n");
-      break;
-    }
-    ui_state->tracks = new_arr;
-
-    Track *t = &ui_state->tracks[idx];
-    memset(t, 0, sizeof(Track));
-
-    // full path
-    snprintf(t->filepath, sizeof(t->filepath), "%s\\%s", folder, ffd.cFileName);
-    // title from filename
-    strncpy(t->title, ffd.cFileName, sizeof(t->title) - 1);
-    strcpy(t->artist, "Unknown");
-    strcpy(t->album, "Unknown");
-    t->duration = 0.0; // will be filled when we actually load/play
-
-    player_fill_metadata_from_file(t->filepath, t);
-
-    ui_state->track_count++;
-  } while (FindNextFileA(hFind, &ffd));
-
-  FindClose(hFind);
+  add_folder_mp3s_recursive(ui_state, folder);
 
   if (ui_state->track_count > 0 &&
       ui_state->selected_index >= ui_state->track_count) {
@@ -212,9 +241,11 @@ static void prompt_add_folder(UIState *ui_state) {
     printf("=== Select folder with MP3 files ===\033[K\n\n");
     if (current[0] == '\0')
       printf("Location: [drives]\033[K\n\n");
-    else
-      printf("Location: %s\033[K\n\n", current);
-
+    else {
+      char current_display[MAX_PATH];
+      ansi_to_utf8(current, current_display, sizeof(current_display));
+      printf("Location: %s\033[K\n\n", current_display);
+    }
     if (count == 0) {
       printf("  (no subfolders)\033[K\n");
     }
@@ -227,7 +258,7 @@ static void prompt_add_folder(UIState *ui_state) {
       }
       FolderItem *it = &items[idx];
       char mark = (idx == selected) ? '>' : ' ';
-      printf("%c %s\033[K\n", mark, it->name);
+      printf("%c %s\033[K\n", mark, it->name_display);
     }
 
     printf("\nControls: ↑/↓ move  ENTER select  S = use this folder  Q = "
@@ -266,7 +297,7 @@ static void prompt_add_folder(UIState *ui_state) {
       FolderItem *sel = &items[selected];
 
       if (current[0] == '\0') {
-        strncpy(current, sel->full, sizeof(current) - 1);
+        strncpy(current, sel->path_fs, sizeof(current) - 1);
         current[sizeof(current) - 1] = '\0';
         selected = 0;
         offset = 0;
@@ -280,8 +311,8 @@ static void prompt_add_folder(UIState *ui_state) {
           }
           selected = 0;
           offset = 0;
-        } else if (sel->full[0]) {
-          strncpy(current, sel->full, sizeof(current) - 1);
+        } else if (sel->path_fs[0]) {
+          strncpy(current, sel->path_fs, sizeof(current) - 1);
           current[sizeof(current) - 1] = '\0';
           selected = 0;
           offset = 0;
@@ -303,6 +334,7 @@ void ui_init(void) {
 
   // Optional: UTF-8 output
   SetConsoleOutputCP(CP_UTF8);
+  SetConsoleCP(CP_UTF8);
 
   // Enter alternate screen buffer
   printf("\x1b[?1049h");
@@ -314,8 +346,10 @@ void ui_init(void) {
 
 void ui_cleanup(void) {
   // Show cursor
-  printf("\x1b[2J\033[H");
   printf("\x1b[?25h");
+
+  // Leave alternate screen (restores original terminal content)
+  printf("\x1b[?1049l");
   fflush(stdout);
 }
 
@@ -437,10 +471,10 @@ void ui_draw(const Player *player, UIState *ui_state) {
     ui_state->track_offset =
         ui_state->track_count > 0 ? ui_state->track_count - 1 : 0;
 
-  for (int i = 0; i < ui_state->track_count && i < max_lines; ++i) {
+  for (int i = 0; i < max_lines; ++i) {
     int idx = ui_state->track_offset + i;
     if (idx >= ui_state->track_count) {
-      printf("\033[K\n"); // blank line to clear old content
+      printf("\033[K\n");
       continue;
     }
 
