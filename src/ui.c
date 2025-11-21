@@ -11,10 +11,40 @@ static int g_first_draw = 1;
 
 typedef struct {
   char name_display[MAX_PATH];
-  char path_fs[MAX_PATH];
+  char path_utf8[MAX_PATH];
   bool is_parent;
   bool is_drive;
 } FolderItem;
+
+/**
+ * UTF-8 (char*) -> UTF-16 (wchar_t*)
+ */
+static int utf8_to_utf16(const char *src, wchar_t *dst, int dst_len) {
+  if (!src || !dst || dst_len <= 0)
+    return 0;
+
+  int wlen = MultiByteToWideChar(CP_UTF8, 0, src, -1, dst, dst_len);
+  if (wlen <= 0) {
+    dst[0] = L'\0';
+    return 0;
+  }
+  return wlen;
+}
+
+/**
+ * UTF-16 (wchar_t*) -> UTF-8 (char*)
+ */
+static int utf16_to_utf8(const wchar_t *src, char *dst, int dst_len) {
+  if (!src || !dst || dst_len <= 0)
+    return 0;
+
+  int len = WideCharToMultiByte(CP_UTF8, 0, src, -1, dst, dst_len, NULL, NULL);
+  if (len <= 0) {
+    dst[0] = '\0';
+    return 0;
+  }
+  return len;
+}
 
 static void ansi_to_utf8(const char *src, char *dst, int dst_size) {
   if (!src || !dst || dst_size <= 0)
@@ -53,9 +83,13 @@ static int list_drives(FolderItem *items, int max_items) {
     if (mask & (1 << (letter - 'A'))) {
       if (count >= max_items)
         break;
+
       FolderItem *it = &items[count++];
-      snprintf(it->path_fs, sizeof(it->path_fs), "%c:\\", letter);
-      ansi_to_utf8(it->path_fs, it->name_display, sizeof(it->name_display));
+
+      // UTF-8 path like "C:\"
+      snprintf(it->path_utf8, sizeof(it->path_utf8), "%c:\\", letter);
+      snprintf(it->name_display, sizeof(it->name_display), "%c:\\", letter);
+
       it->is_parent = false;
       it->is_drive = true;
     }
@@ -63,46 +97,57 @@ static int list_drives(FolderItem *items, int max_items) {
   return count;
 }
 
-static int list_subdirs2(const char *base, FolderItem *items, int max_items) {
+static int list_subdirs2(const char *base_utf8, FolderItem *items,
+                         int max_items) {
   int count = 0;
 
-  // parent entry
-  if (base && base[0] != '\0') {
+  // Parent entry ".."
+  if (base_utf8 && base_utf8[0] != '\0') {
     FolderItem *p = &items[count++];
     strcpy(p->name_display, "..");
-    p->path_fs[0] = '\0';
+    p->path_utf8[0] = '\0'; // will be handled specially
     p->is_parent = true;
     p->is_drive = false;
   }
 
-  char search[MAX_PATH];
-  snprintf(search, sizeof(search), "%s\\*", base);
+  // Build UTF-16 search path: base_utf8 + "\\*"
+  wchar_t base_w[MAX_PATH];
+  if (!utf8_to_utf16(base_utf8, base_w, MAX_PATH)) {
+    return count;
+  }
 
-  // TODO: Change to Wide format to support UTF8 (Cyrillic)
+  wchar_t search_w[MAX_PATH];
+  swprintf(search_w, MAX_PATH, L"%ls\\*", base_w);
 
-  WIN32_FIND_DATAA ffd;
-  HANDLE hFind = FindFirstFileA(search, &ffd);
+  WIN32_FIND_DATAW ffd;
+  HANDLE hFind = FindFirstFileW(search_w, &ffd);
   if (hFind == INVALID_HANDLE_VALUE)
     return count;
 
   do {
     if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-      if (strcmp(ffd.cFileName, ".") == 0 || strcmp(ffd.cFileName, "..") == 0)
+      if (wcscmp(ffd.cFileName, L".") == 0 || wcscmp(ffd.cFileName, L"..") == 0)
         continue;
 
       if (count >= max_items)
         break;
-      FolderItem *it = &items[count++];
-      // filesystem path (still ANSI)
-      snprintf(it->path_fs, sizeof(it->path_fs), "%s\\%s", base, ffd.cFileName);
 
-      // display name: ffd.cFileName converted to UTF-8
-      ansi_to_utf8(ffd.cFileName, it->name_display, sizeof(it->name_display));
+      FolderItem *it = &items[count++];
+
+      // full UTF-16 path = base_w + "\" + ffd.cFileName
+      wchar_t full_w[MAX_PATH];
+      swprintf(full_w, MAX_PATH, L"%ls\\%ls", base_w, ffd.cFileName);
+
+      // convert full path to UTF-8 for path_utf8
+      utf16_to_utf8(full_w, it->path_utf8, sizeof(it->path_utf8));
+
+      // convert folder name to UTF-8 for display
+      utf16_to_utf8(ffd.cFileName, it->name_display, sizeof(it->name_display));
 
       it->is_parent = false;
       it->is_drive = false;
     }
-  } while (FindNextFileA(hFind, &ffd));
+  } while (FindNextFileW(hFind, &ffd));
 
   FindClose(hFind);
   return count;
@@ -123,14 +168,20 @@ static void play_track_at_index(Player *player, UIState *ui_state, int index) {
 }
 
 // Load all *.mp3 files from a folder into ui_state->tracks
-static void add_folder_mp3s_recursive(UIState *ui_state, const char *folder) {
-  WIN32_FIND_DATAA ffd;
+static void add_folder_mp3s_recursive(UIState *ui_state,
+                                      const char *folder_utf8) {
+  WIN32_FIND_DATAW ffd;
   HANDLE hFind;
-  char search[MAX_PATH];
+  wchar_t folder_w[MAX_PATH];
+  wchar_t search_w[MAX_PATH];
+
+  if (!utf8_to_utf16(folder_utf8, folder_w, MAX_PATH)) {
+    return;
+  }
 
   // 1) Add all *.mp3 in this folder
-  snprintf(search, sizeof(search), "%s\\*.mp3", folder);
-  hFind = FindFirstFileA(search, &ffd);
+  swprintf(search_w, MAX_PATH, L"%ls\\*.mp3", folder_w);
+  hFind = FindFirstFileW(search_w, &ffd);
   if (hFind != INVALID_HANDLE_VALUE) {
     do {
       if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
@@ -147,50 +198,54 @@ static void add_folder_mp3s_recursive(UIState *ui_state, const char *folder) {
       Track *t = &ui_state->tracks[idx];
       memset(t, 0, sizeof(Track));
 
-      // full path
-      snprintf(t->filepath, sizeof(t->filepath), "%s\\%s", folder,
-               ffd.cFileName);
+      // full path in UTF-16
+      wchar_t full_w[MAX_PATH];
+      swprintf(full_w, MAX_PATH, L"%ls\\%ls", folder_w, ffd.cFileName);
 
-      // defaults from filename
-      ansi_to_utf8(ffd.cFileName, t->title, sizeof(t->title));
+      // convert full path to UTF-8 for Track.filepath
+      utf16_to_utf8(full_w, t->filepath, sizeof(t->filepath));
+
+      // default title from filename (UTF-8)
+      utf16_to_utf8(ffd.cFileName, t->title, sizeof(t->title));
+
       strcpy(t->artist, "Unknown Artist");
       strcpy(t->album, "Unknown Album");
       t->duration = 0.0;
 
-      // fill metadata (title/artist/album/duration) if available
+      // your existing metadata loader (still char*)
       player_fill_metadata_from_file(t->filepath, t);
 
       ui_state->track_count++;
-    } while (FindNextFileA(hFind, &ffd));
+    } while (FindNextFileW(hFind, &ffd));
     FindClose(hFind);
   }
 
   // 2) Recurse into subdirectories
-  snprintf(search, sizeof(search), "%s\\*", folder);
-  hFind = FindFirstFileA(search, &ffd);
+  swprintf(search_w, MAX_PATH, L"%ls\\*", folder_w);
+  hFind = FindFirstFileW(search_w, &ffd);
   if (hFind == INVALID_HANDLE_VALUE)
     return;
 
   do {
     if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-      if (strcmp(ffd.cFileName, ".") == 0 || strcmp(ffd.cFileName, "..") == 0)
+      if (wcscmp(ffd.cFileName, L".") == 0 || wcscmp(ffd.cFileName, L"..") == 0)
         continue;
 
-      char sub[MAX_PATH];
-      snprintf(sub, sizeof(sub), "%s\\%s", folder, ffd.cFileName);
+      wchar_t sub_w[MAX_PATH];
+      swprintf(sub_w, MAX_PATH, L"%ls\\%ls", folder_w, ffd.cFileName);
 
-      // You might want to skip huge system dirs if scanning root drives
-      // e.g. skip "Windows", "Program Files" here if needed.
+      char sub_utf8[MAX_PATH];
+      utf16_to_utf8(sub_w, sub_utf8, sizeof(sub_utf8));
 
-      add_folder_mp3s_recursive(ui_state, sub);
+      add_folder_mp3s_recursive(ui_state, sub_utf8);
     }
-  } while (FindNextFileA(hFind, &ffd));
+  } while (FindNextFileW(hFind, &ffd));
 
   FindClose(hFind);
 }
 
-static void add_folder_mp3s(UIState *ui_state, const char *folder) {
-  add_folder_mp3s_recursive(ui_state, folder);
+static void add_folder_mp3s(UIState *ui_state, const char *folder_utf8) {
+  add_folder_mp3s_recursive(ui_state, folder_utf8);
 
   if (ui_state->track_count > 0 &&
       ui_state->selected_index >= ui_state->track_count) {
@@ -242,9 +297,7 @@ static void prompt_add_folder(UIState *ui_state) {
     if (current[0] == '\0')
       printf("Location: [drives]\033[K\n\n");
     else {
-      char current_display[MAX_PATH];
-      ansi_to_utf8(current, current_display, sizeof(current_display));
-      printf("Location: %s\033[K\n\n", current_display);
+      printf("Location: %s\033[K\n\n", current);
     }
     if (count == 0) {
       printf("  (no subfolders)\033[K\n");
@@ -285,7 +338,7 @@ static void prompt_add_folder(UIState *ui_state) {
 
     if (ch == 's' || ch == 'S') {
       if (current[0] != '\0') {
-        add_folder_mp3s(ui_state, current);
+        add_folder_mp3s(ui_state, current); // current = UTF-8 path
       }
       break;
     }
@@ -297,22 +350,24 @@ static void prompt_add_folder(UIState *ui_state) {
       FolderItem *sel = &items[selected];
 
       if (current[0] == '\0') {
-        strncpy(current, sel->path_fs, sizeof(current) - 1);
+        // selecting a drive
+        strncpy(current, sel->path_utf8, sizeof(current) - 1);
         current[sizeof(current) - 1] = '\0';
         selected = 0;
         offset = 0;
       } else {
         if (sel->is_parent) {
+          // go up one level in UTF-8 path
           char *last = strrchr(current, '\\');
-          if (last && last > current + 2) {
+          if (last && last > current + 2) { // e.g. "C:\folder"
             *last = '\0';
           } else {
-            current[0] = '\0';
+            current[0] = '\0'; // back to drives
           }
           selected = 0;
           offset = 0;
-        } else if (sel->path_fs[0]) {
-          strncpy(current, sel->path_fs, sizeof(current) - 1);
+        } else if (sel->path_utf8[0]) {
+          strncpy(current, sel->path_utf8, sizeof(current) - 1);
           current[sizeof(current) - 1] = '\0';
           selected = 0;
           offset = 0;
