@@ -23,6 +23,7 @@ int main(int argc, char *argv[]) {
   ui_state.tracks = NULL;
   ui_state.track_count = 0;
   ui_state.selected_index = 0;
+  ui_state.track_offset = 0;
 
   // OPTIONAL: if user *does* pass an mp3, pre-load it
   if (argc >= 2) {
@@ -41,7 +42,10 @@ int main(int argc, char *argv[]) {
     ui_get_terminal_size(&ui_state.width, &ui_state.height);
 
     // Update player state
-    player_update(&player);
+    bool finished = player_update(&player);
+    if (finished) {
+      ui_handle_track_end(&player, &ui_state);
+    }
 
     // Draw UI
     ui_draw(&player, &ui_state);
@@ -54,9 +58,9 @@ int main(int argc, char *argv[]) {
   }
 
   // Cleanup
+  printf("Goodbye!\n");
   ui_cleanup();
   free(ui_state.tracks);
-  printf("Goodbye!\n");
 
   return 0;
 }

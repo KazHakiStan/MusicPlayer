@@ -5,6 +5,8 @@
 
 typedef enum { PLAYER_STOPPED, PLAYER_PLAYING, PLAYER_PAUSED } PlayerState;
 
+typedef enum { REPEAT_NONE = 0, REPEAT_ONE, REPEAT_ALL } RepeatMode;
+
 typedef struct {
   char title[256];
   char artist[256];
@@ -18,7 +20,7 @@ typedef struct {
   Track current_track;
   double position;
   double volume;
-  bool repeat;
+  RepeatMode repeat_mode;
   bool shuffle;
 } Player;
 
@@ -30,7 +32,9 @@ void player_pause(Player *player);
 void player_stop(Player *player);
 void player_seek(Player *player, double position);
 void player_set_volume(Player *player, double volume);
-void player_update(Player *player);
+bool player_update(Player *player);
 void player_cleanup(void);
+
+void player_fill_metadata_from_file(const char *filepath, Track *track);
 
 #endif
