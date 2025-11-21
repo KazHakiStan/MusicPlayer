@@ -16,6 +16,52 @@ typedef struct {
   bool is_drive;
 } FolderItem;
 
+// Truncate UTF-8 string to at most max_chars characters, safely.
+// Returns the number of characters written to dst (not counting '\0').
+static int utf8_truncate(const char *src, char *dst, int dst_size,
+                         int max_chars) {
+  if (!src || !dst || dst_size <= 0 || max_chars <= 0) {
+    if (dst_size > 0)
+      dst[0] = '\0';
+    return 0;
+  }
+
+  int chars = 0;
+  const unsigned char *s = (const unsigned char *)src;
+  char *d = dst;
+  char *d_end = dst + dst_size - 1; // leave space for '\0'
+
+  while (*s && d < d_end && chars < max_chars) {
+    unsigned char c = *s;
+    int len = 1;
+
+    if ((c & 0x80) == 0x00) {
+      len = 1; // ASCII
+    } else if ((c & 0xE0) == 0xC0) {
+      len = 2; // 2-byte
+    } else if ((c & 0xF0) == 0xE0) {
+      len = 3; // 3-byte
+    } else if ((c & 0xF8) == 0xF0) {
+      len = 4; // 4-byte
+    } else {
+      // invalid byte, skip
+      s++;
+      continue;
+    }
+
+    if (d + len > d_end)
+      break;
+
+    for (int i = 0; i < len; ++i) {
+      *d++ = *s++;
+    }
+
+    chars++;
+  }
+
+  *d = '\0';
+  return chars;
+}
 /**
  * UTF-8 (char*) -> UTF-16 (wchar_t*)
  */
@@ -508,11 +554,9 @@ void ui_draw(const Player *player, UIState *ui_state) {
 
   // NEW: Playlist
   printf("Playlist (A: add folder, ENTER: play):\033[K\n");
-  printf("   %-25.25s | %-25.25s | %-30.30s\033[K\n", "Title", "Artist",
-         "Album");
-  printf("   %-25.25s-+-%-25.25s-+-%-30.30s\033[K\n",
-         "------------------------", "------------------------",
-         "------------------------------");
+  printf("   %-25s | %-25s | %-30s\033[K\n", "Title", "Artist", "Album");
+  printf("   %-25s-+-%-25s-+-%-30s\033[K\n", "------------------------",
+         "------------------------", "------------------------------");
 
   // how many lines we can show, leaving some space for header/footer
   int max_lines = ui_state->height - 18;
@@ -536,10 +580,40 @@ void ui_draw(const Player *player, UIState *ui_state) {
     const Track *t = &ui_state->tracks[idx];
     char marker = (idx == ui_state->selected_index ? '>' : ' ');
 
-    printf("%c %2d %-25.25s | %-25.25s | %-30.30s\033[K\n", marker, idx + 1,
-           t->title[0] ? t->title : "-", t->artist[0] ? t->artist : "-",
-           t->album[0] ? t->album : "-");
+    char title_buf[64];
+    char artist_buf[64];
+    char album_buf[64];
+
+    int title_chars = utf8_truncate(t->title[0] ? t->title : "-", title_buf,
+                                    sizeof(title_buf), 25);
+    int artist_chars = utf8_truncate(t->artist[0] ? t->artist : "-", artist_buf,
+                                     sizeof(artist_buf), 25);
+    int album_chars = utf8_truncate(t->album[0] ? t->album : "-", album_buf,
+                                    sizeof(album_buf), 30);
+
+    // prefix: marker + track number
+    printf("%c %4d ", marker, idx + 1);
+
+    // Title column (25 chars)
+    fputs(title_buf, stdout);
+    for (int c = title_chars; c < 25; ++c)
+      putchar(' ');
+    printf(" | ");
+
+    // Artist column (25 chars)
+    fputs(artist_buf, stdout);
+    for (int c = artist_chars; c < 25; ++c)
+      putchar(' ');
+    printf(" | ");
+
+    // Album column (30 chars)
+    fputs(album_buf, stdout);
+    for (int c = album_chars; c < 30; ++c)
+      putchar(' ');
+
+    printf("\033[K\n");
   }
+
   if (ui_state->track_count == 0) {
     printf("  (no tracks loaded)\033[K\n");
   }
