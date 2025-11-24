@@ -7,8 +7,11 @@
 
 static void run_uninstaller(void) {
   // Let cmd.exe / PowerShell expand $env:LOCALAPPDATA
-  const char *cmd = "powershell -ExecutionPolicy Bypass -NoProfile "
-                    "-File \"$env:LOCALAPPDATA\\MusicPlayer\\uninstall.ps1\"";
+  char cmd[1024];
+  snprintf(cmd, sizeof(cmd),
+           "powershell -ExecutionPolicy Bypass -NoProfile -File "
+           "\"%s\\MusicPlayer\\uninstall.ps1\"",
+           "%LOCALAPPDATA%");
 
   system(cmd);
 }
