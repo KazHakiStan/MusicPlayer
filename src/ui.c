@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "ctype.h"
 #include "direct.h"
+#include "version.h"
 #include <conio.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -489,7 +490,16 @@ void ui_draw(const Player *player, UIState *ui_state) {
     return;
   }
 
-  printf("=== CLI Music Player ===\033[K\n\033[K\n");
+  printf("=== CLI Music Player (v%s) ===\033[K\n\033[K\n", MP_VERSION);
+
+  if (ui_state->has_update) {
+    printf("==== UPDATE AVAILABLE: %s (run: musicplayer update) ====\033[K\n\n",
+           ui_state->latest_version);
+  } else {
+    printf("\033[K\n");
+  }
+
+  printf("\033[K\n");
 
   // Current track info
   printf("Now Playing: ");
