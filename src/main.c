@@ -5,6 +5,14 @@
 #include <stdlib.h>
 #include <windows.h>
 
+static void run_uninstaller(void) {
+  // Let cmd.exe / PowerShell expand $env:LOCALAPPDATA
+  const char *cmd = "powershell -ExecutionPolicy Bypass -NoProfile "
+                    "-File \"$env:LOCALAPPDATA\\MusicPlayer\\uninstall.ps1\"";
+
+  system(cmd);
+}
+
 static int check_for_update(UIState *ui_state) {
   char cmd[512];
 
@@ -77,6 +85,11 @@ int main(int argc, char *argv[]) {
 
   if (argc > 1 && strcmp(argv[1], "--version") == 0) {
     printf("%s\n", MP_VERSION);
+    return 0;
+  }
+
+  if (strcmp(argv[1], "uninstall") == 0) {
+    run_uninstaller();
     return 0;
   }
 
