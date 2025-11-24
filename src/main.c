@@ -1,10 +1,85 @@
 #include "player.h"
 #include "ui.h"
+#include "version.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <windows.h>
 
+static int check_for_update(UIState *ui_state) {
+  char cmd[512];
+
+  // use %LOCALAPPDATA%\MusicPlayer\update.ps1 -CheckOnly
+  // let cmd.exe expand %LOCALAPPDATA%
+  snprintf(cmd, sizeof(cmd),
+           "powershell -ExecutionPolicy Bypass -NoProfile -File "
+           "\"$env:LOCALAPPDATA\\MusicPlayer\\update.ps1\" -CheckOnly");
+
+  FILE *pipe = _popen(cmd, "r");
+  if (!pipe) {
+    return 0;
+  }
+
+  char buf[256];
+  char latest[64] = {0};
+
+  // read last line from output (should be just "v0.x.y" or empty)
+  while (fgets(buf, sizeof(buf), pipe)) {
+    strncpy(latest, buf, sizeof(latest) - 1);
+    latest[sizeof(latest) - 1] = '\0';
+  }
+  _pclose(pipe);
+
+  // trim whitespace
+  char *p = latest;
+  while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+    p++;
+  char *end = p + strlen(p);
+  while (end > p && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' ||
+                     end[-1] == '\n')) {
+    *--end = '\0';
+  }
+
+  if (p[0] == '\0') {
+    // no new version
+    ui_state->has_update = false;
+    ui_state->latest_version[0] = '\0';
+    return 0;
+  }
+
+  ui_state->has_update = true;
+  strncpy(ui_state->latest_version, p, sizeof(ui_state->latest_version) - 1);
+  ui_state->latest_version[sizeof(ui_state->latest_version) - 1] = '\0';
+  return 1;
+}
+
+static void run_updater(void) {
+  char cmd[1024];
+
+  // use %LOCALAPPDATA%\MusicPlayer\update.ps1
+  // We let cmd.exe expand %LOCALAPPDATA%
+  snprintf(cmd, sizeof(cmd),
+           "powershell -ExecutionPolicy Bypass -NoProfile -File "
+           "\"%s\\MusicPlayer\\update.ps1\"",
+           "%LOCALAPPDATA");
+
+  // system() will go through cmd.exe, so %LOCALAPPDATA% expands
+  int rc = system(cmd);
+  (void)rc;
+}
+
 int main(int argc, char *argv[]) {
+  if (argc > 1 && strcmp(argv[1], "update") == 0) {
+    // run the updater script and exit
+    // (see below)
+    run_updater();
+    return 0;
+  }
+
+  if (argc > 1 && strcmp(argv[1], "--version") == 0) {
+    printf("%s\n", MP_VERSION);
+    return 0;
+  }
+
   printf("Starting main, argc = %d\n", argc);
   fflush(stdout);
 
@@ -24,6 +99,8 @@ int main(int argc, char *argv[]) {
   ui_state.track_count = 0;
   ui_state.selected_index = 0;
   ui_state.track_offset = 0;
+  ui_state.has_update = false;
+  ui_state.latest_version[0] = '\0';
 
   // OPTIONAL: if user *does* pass an mp3, pre-load it
   if (argc >= 2) {
@@ -35,6 +112,8 @@ int main(int argc, char *argv[]) {
       Sleep(1000);
     }
   }
+
+  check_for_update(&ui_state);
 
   // Main loop
   while (!ui_state.should_quit) {

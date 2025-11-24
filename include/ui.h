@@ -13,6 +13,9 @@ typedef struct {
   int selected_index;
 
   int track_offset;
+
+  bool has_update;
+  char latest_version[32];
 } UIState;
 
 // UI functions
