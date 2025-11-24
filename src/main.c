@@ -88,7 +88,7 @@ int main(int argc, char *argv[]) {
     return 0;
   }
 
-  if (strcmp(argv[1], "uninstall") == 0) {
+  if (argc > 1 && strcmp(argv[1], "uninstall") == 0) {
     run_uninstaller();
     return 0;
   }
