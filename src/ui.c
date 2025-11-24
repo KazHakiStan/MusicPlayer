@@ -499,7 +499,7 @@ void ui_draw(const Player *player, UIState *ui_state) {
     printf("\033[K\n");
   }
 
-  printf("\033[K\n");
+  // printf("\033[K\n");
 
   // Current track info
   printf("Now Playing: ");
