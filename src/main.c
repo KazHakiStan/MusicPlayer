@@ -60,7 +60,7 @@ static void run_updater(void) {
   snprintf(cmd, sizeof(cmd),
            "powershell -ExecutionPolicy Bypass -NoProfile -File "
            "\"%s\\MusicPlayer\\update.ps1\"",
-           "%LOCALAPPDATA");
+           "%LOCALAPPDATA%");
 
   // system() will go through cmd.exe, so %LOCALAPPDATA% expands
   int rc = system(cmd);
