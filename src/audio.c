@@ -3,6 +3,7 @@
 #include <mpg123.h>
 #include <portaudio.h>
 
+#include "windows.h"
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -101,7 +102,7 @@ bool audio_load_file(AudioEngine *engine, const char *filename) {
   if (!engine)
     return false;
 
-  // Stop current playback
+  // Stop current playback & reset state
   if (engine->stream) {
     Pa_StopStream(engine->stream);
     Pa_CloseStream(engine->stream);
@@ -158,14 +159,6 @@ bool audio_load_file(AudioEngine *engine, const char *filename) {
   engine->sample_rate = rate;
   engine->channels = channels;
 
-  // Duration from mpg123_length (frames per channel)
-  off_t len_per_channel = mpg123_length(mh);
-  if (len_per_channel > 0) {
-    engine->duration = (double)len_per_channel / (double)rate;
-    fprintf(stderr, "[audio] mpg123_length: %lld frames/ch, duration=%.2f s\n",
-            (long long)len_per_channel, engine->duration);
-  }
-
   // ---- Decode whole file to 16-bit buffer ----
   unsigned char *buffer = NULL;
   size_t buffer_size = 0;
@@ -205,9 +198,8 @@ bool audio_load_file(AudioEngine *engine, const char *filename) {
   mpg123_close(mh);
   mpg123_delete(mh);
 
-  // buffer now has 16-bit signed samples
-  size_t sample_count_int16 =
-      buffer_size / sizeof(short); // total ints, all channels
+  // buffer now has 16-bit signed samples (all channels, interleaved)
+  size_t sample_count_int16 = buffer_size / sizeof(short);
   short *sbuf = (short *)buffer;
 
   // Convert to float in [-1, 1]
@@ -224,23 +216,23 @@ bool audio_load_file(AudioEngine *engine, const char *filename) {
   free(buffer);
 
   engine->sample_count =
-      sample_count_int16; // number of float samples (frames * channels)
+      sample_count_int16; // float samples (frames * channels)
   engine->play_cursor = 0;
 
-  // Sanity: compute duration from buffer
-  size_t frames = sample_count_int16 / (size_t)channels;
-  double dur_from_buffer = (double)frames / (double)rate;
+  // ---- Duration from decoded buffer (single source of truth) ----
+  size_t frames = sample_count_int16 / (size_t)channels; // samples per channel
+  double dur_from_buffer = 0.0;
+  if (frames > 0 && rate > 0) {
+    dur_from_buffer = (double)frames / (double)rate;
+  }
+  engine->duration = dur_from_buffer;
+
   fprintf(stderr,
           "[audio] rate=%ld, channels=%d, total_samples=%zu, frames=%zu, "
-          "dur_from_buffer=%.2f s\n",
-          rate, channels, sample_count_int16, frames, dur_from_buffer);
+          "duration=%.2f s\n",
+          rate, channels, sample_count_int16, frames, engine->duration);
 
-  // If mpg123_length failed, use fallback
-  if (engine->duration <= 0.0) {
-    engine->duration = dur_from_buffer;
-  }
-
-  // ---- Setup PortAudio stream as before ----
+  // ---- Setup PortAudio stream ----
   PaStreamParameters outParams;
   memset(&outParams, 0, sizeof(outParams));
   outParams.device = Pa_GetDefaultOutputDevice();

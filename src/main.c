@@ -117,6 +117,14 @@ int main(int argc, char *argv[]) {
   ui_state.track_offset = 0;
   ui_state.has_update = false;
   ui_state.latest_version[0] = '\0';
+  ui_state.dirty = true;
+  ui_state.last_prog_tick = GetTickCount();
+  ui_state.screen = SCREEN_MAIN;
+  ui_state.folder_current[0] = '\0';
+  ui_state.folder_selected = 0;
+  ui_state.folder_offset = 0;
+
+  ui_init_state(&ui_state, UI_MODE_FULL);
 
   // OPTIONAL: if user *does* pass an mp3, pre-load it
   if (argc >= 2) {
@@ -131,27 +139,44 @@ int main(int argc, char *argv[]) {
 
   check_for_update(&ui_state);
 
+  DWORD last_prog_tick = GetTickCount();
+
   // Main loop
   while (!ui_state.should_quit) {
-    // Update terminal size
+    int old_w = ui_state.width;
+    int old_h = ui_state.height;
     ui_get_terminal_size(&ui_state.width, &ui_state.height);
+    if (ui_state.width != old_w || ui_state.height != old_h) {
+      ui_state.dirty = true;
+    }
 
-    // Update player state
+    PlayerState old_state = player.state;
+    double old_pos = player.position;
     bool finished = player_update(&player);
     if (finished) {
       ui_handle_track_end(&player, &ui_state);
     }
 
-    // Draw UI
-    ui_draw(&player, &ui_state);
+    if (player.state != old_state) {
+      ui_state.dirty = true;
+    }
 
-    // Handle input
+    DWORD now = GetTickCount();
+    if (player.state == PLAYER_PLAYING &&
+        now - ui_state.last_prog_tick >= 100) {
+      ui_state.dirty = true;
+      ui_state.last_prog_tick = now;
+    }
+
     ui_handle_input(&player, &ui_state);
 
-    // Small delay to prevent high CPU usage
-    Sleep(50);
-  }
+    if (ui_state.dirty) {
+      ui_draw(&player, &ui_state);
+      ui_state.dirty = false;
+    }
 
+    Sleep(10);
+  }
   // Cleanup
   printf("Goodbye!\n");
   ui_cleanup();
