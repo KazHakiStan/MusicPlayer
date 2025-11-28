@@ -23,7 +23,8 @@ static int check_for_update(UIState *ui_state) {
   // let cmd.exe expand %LOCALAPPDATA%
   snprintf(cmd, sizeof(cmd),
            "powershell -ExecutionPolicy Bypass -NoProfile -File "
-           "\"$env:LOCALAPPDATA\\MusicPlayer\\update.ps1\" -CheckOnly");
+           "\"%s\\MusicPlayer\\update.ps1\" -CheckOnly",
+           "%LOCALAPPDATA%");
 
   FILE *pipe = _popen(cmd, "r");
   if (!pipe) {

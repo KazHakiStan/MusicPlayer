@@ -100,9 +100,15 @@ static void comp_banner_draw(UiComponent *self, const Player *player,
                              const UIState *ui, UiRect area) {
   (void)self;
   (void)player;
-  (void)ui;
+  (void)area;
 
-  printf("=== CLI Music Player (v%s) ===\033[K\n", MP_VERSION);
+  if (ui->has_update) {
+    printf("=== CLI Music Player (v%s) === UPDATE AVAILABLE: %s (run "
+           "musicplayer update) ===\033[K\n",
+           MP_VERSION, ui->latest_version);
+  } else {
+    printf("=== CLI Music Player (v%s) ===\033[K\n", MP_VERSION);
+  }
 }
 
 static void comp_now_playing_draw(UiComponent *self, const Player *player,
@@ -272,6 +278,12 @@ static void draw_main_screen_components(const Player *player, UIState *ui) {
 
       UiRect comp_rect = (UiRect){.x = r.x, .y = current_y, .w = r.w, .h = 1};
 
+      printf("%n", &comp_rect.h);
+      Sleep(2000);
+
+      if (comp_rect.h == 0)
+        continue;
+
       // playlist uses remaining height
       if (strcmp(c->id, "playlist") == 0) {
         comp_rect.h = r.y + r.h - current_y;
@@ -286,7 +298,8 @@ static void draw_main_screen_components(const Player *player, UIState *ui) {
     }
 
     // After certain sections, draw separators
-    if (s != UI_SECTION_FOOTER) {
+    if (s != UI_SECTION_FOOTER ||
+        (s == UI_SECTION_MAIN && ui->mode == UI_MODE_COMPACT)) {
       printf("\033[%d;1H", r.y + r.h + 1); // next line after section
       draw_hline(ui->width);
       // Sleep(4000);
@@ -1092,10 +1105,10 @@ void ui_compute_layout(UIState *ui) {
     if (ui->mode == UI_MODE_COMPACT) {
       // if (header_progress)
       //   header_progress->enabled = false;
-      if (footer_controls)
-        footer_controls->enabled = false;
-      if (playlist)
-        playlist->enabled = false;
+      // if (footer_controls)
+      //   footer_controls->enabled = false;
+      // if (playlist)
+      //   playlist->enabled = false;
     } else {
       // if (header_progress)
       //   header_progress->enabled = true;
@@ -1113,12 +1126,20 @@ void ui_compute_layout(UIState *ui) {
   UiRect main = (UiRect){0, banner.h + header.h + nav.h + 3, w,
                          h - banner.h - header.h - nav.h - footer.h - 4};
 
+  // clear_rect(main);
+
   if (ui->mode == UI_MODE_COMPACT) {
-    header.h = 2;
+    clear_rect(banner);
+    banner.h = 0;
+    clear_rect(header);
+    header.h = 0;
+    clear_rect(nav);
     nav.h = 0;
-    footer.h = 2;
-    main.y = header.h;
-    main.h = h - header.h - footer.h;
+    clear_rect(footer);
+    footer.h = 0;
+    clear_rect(main);
+    main.h = 0;
+    // main.h = h - banner.h - header.h - nav.h;
   }
 
   ui->sections[UI_SECTION_BANNER].rect = banner;
